@@ -224,6 +224,9 @@ input[type="password"] { font: inherit; font-size: 1rem; color: var(--fg); backg
     <label class="f" for="chapter">Kapitel
       <select id="chapter"></select>
     </label>
+    <label class="f" id="part-label" for="part" hidden>Teil
+      <select id="part"></select>
+    </label>
     <label class="f" for="dir">Richtung
       <select id="dir">
         <option value="en2de" selected>Englisch → Deutsch</option>
@@ -235,6 +238,7 @@ input[type="password"] { font: inherit; font-size: 1rem; color: var(--fg); backg
       <label class="check" for="artquiz"><input type="checkbox" id="artquiz" checked> Artikel abfragen</label>
       <label class="check" for="slow"><input type="checkbox" id="slow"> Langsam sprechen</label>
       <label class="check" for="autoplay"><input type="checkbox" id="autoplay"> Wort automatisch vorlesen</label>
+      <button type="button" class="small" id="btn-restart">Runde neu mischen</button>
     </div>
   </section>
 
@@ -1480,23 +1484,89 @@ let checked = false;
 let attempts = 0;
 let finished = false;
 
-function buildDeck() {
-  const ch = $('chapter').value;
-  deck = ALL.filter(function (c) {
-    if (ch !== 'all' && c.ch !== ch) return false;
-    return true;
-  }).map(function (c) { return c.id; });
-  if ($('shuffle').checked) {
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const t = deck[i]; deck[i] = deck[j]; deck[j] = t;
-    }
+/* ---------- Rounds: every word once per round, shuffled; the position is remembered ---------- */
+const PART = 25;
+const ROUND_KEY = 'wt-rounds-v1', SEL_KEY = 'wt-sel-v1';
+const ID_BY_DE = {};
+ALL.forEach(function (c) { ID_BY_DE[c.de] = c.id; });
+let rounds = {};
+try { rounds = JSON.parse(localStorage.getItem(ROUND_KEY) || '{}') || {}; } catch (e) { rounds = {}; }
+function saveRounds() { try { localStorage.setItem(ROUND_KEY, JSON.stringify(rounds)); } catch (e) {} }
+let newRoundNote = false;
+
+function shuffled(a) {
+  const x = a.slice();
+  for (let i = x.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = x[i]; x[i] = x[j]; x[j] = t;
   }
-  pos = 0;
+  return x;
+}
+function selKey() { return dir() + '|' + $('chapter').value + '|' + $('part').value + '|' + ($('shuffle').checked ? 'm' : 'o'); }
+function selectionIds() {
+  const ch = $('chapter').value;
+  let ids = ALL.filter(function (c) { return ch === 'all' || c.ch === ch; }).map(function (c) { return c.id; });
+  const part = $('part').value;
+  if (part !== 'all') { const k = Number(part); ids = ids.slice(k * PART, (k + 1) * PART); }
+  return ids;
+}
+function populateParts() {
+  const ch = $('chapter').value, sel = $('part');
+  sel.textContent = '';
+  const n = ch === 'all' ? 0 : ALL.filter(function (c) { return c.ch === ch; }).length;
+  const add = function (v, t) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
+  add('all', 'Ganzes Kapitel');
+  const split = n > PART + 5;
+  if (split) {
+    for (let k = 0; k * PART < n; k++) add(String(k), 'Teil ' + (k + 1) + ' (' + (k * PART + 1) + '–' + Math.min((k + 1) * PART, n) + ')');
+  }
+  $('part-label').hidden = !split;
+}
+function buildDeck(forceNew) {
+  const des = selectionIds().map(function (id) { return ALL[id].de; });
+  const key = selKey();
+  const m = $('shuffle').checked;
+  let r = forceNew ? null : rounds[key];
+  if (r && Array.isArray(r.order)) {
+    const valid = new Set(des);
+    let order = r.order.filter(function (d) { return valid.has(d); });
+    const have = new Set(order);
+    const missing = des.filter(function (d) { return !have.has(d); });
+    order = order.concat(m ? shuffled(missing) : missing);
+    r = { order: order, pos: Math.max(0, Math.min(Number(r.pos) || 0, order.length - 1)) };
+  } else {
+    r = { order: m ? shuffled(des) : des.slice(), pos: 0 };
+  }
+  rounds[key] = r;
+  saveRounds();
+  deck = r.order.map(function (d) { return ID_BY_DE[d]; });
+  pos = r.pos;
+}
+function savePos() { const r = rounds[selKey()]; if (r) { r.pos = pos; saveRounds(); } }
+function saveSel() {
+  try {
+    localStorage.setItem(SEL_KEY, JSON.stringify({
+      dir: $('dir').value, chapter: $('chapter').value, part: $('part').value,
+      shuffle: $('shuffle').checked, art: $('artquiz').checked, slow: $('slow').checked, auto: $('autoplay').checked
+    }));
+  } catch (e) {}
+}
+function restoreSel() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(SEL_KEY) || 'null'); } catch (e) { v = null; }
+  if (!v) { populateParts(); return; }
+  if (v.dir === 'en2de' || v.dir === 'de2en') $('dir').value = v.dir;
+  if (Array.prototype.some.call($('chapter').options, function (o) { return o.value === v.chapter; })) $('chapter').value = v.chapter;
+  populateParts();
+  if (Array.prototype.some.call($('part').options, function (o) { return o.value === v.part; })) $('part').value = v.part;
+  if (typeof v.shuffle === 'boolean') $('shuffle').checked = v.shuffle;
+  if (typeof v.art === 'boolean') $('artquiz').checked = v.art;
+  if (typeof v.slow === 'boolean') $('slow').checked = v.slow;
+  if (typeof v.auto === 'boolean') $('autoplay').checked = v.auto;
 }
 
 function updateTally() {
-  $('total-note').textContent = ALL.length + ' Wörter und Wendungen, alle drehen sich endlos weiter.';
+  $('total-note').textContent = ALL.length + ' Wörter und Wendungen. Jedes Wort kommt einmal pro Runde dran, dann beginnt eine neue Runde.';
 }
 
 function cur() { return ALL[deck[pos]]; }
@@ -1511,8 +1581,8 @@ function renderCard() {
   const rev = dir() === 'en2de';
   const quiz = !rev && c.art && $('artquiz').checked;
   $('artquiz').disabled = rev;
-  $('ctop-ch').textContent = c.ch;
-  $('ctop-n').textContent = 'Karte ' + (pos + 1) + ' / ' + deck.length;
+  $('ctop-ch').textContent = c.ch + ($('part').value !== 'all' ? ' · Teil ' + (Number($('part').value) + 1) : '');
+  $('ctop-n').textContent = 'Karte ' + (pos + 1) + ' / ' + deck.length + (newRoundNote ? ' · neue Runde' : '');
   $('word').textContent = rev ? c.en : (quiz ? c.rest : c.de);
   $('word').lang = rev ? 'en' : 'de';
   $('tr-label').textContent = rev ? 'Übersetzung auf Deutsch (Nomen mit Artikel)' : 'Übersetzung auf Englisch';
@@ -1715,8 +1785,20 @@ function renderResult(ctx) {
 function next() {
   if (!deck.length) return;
   if (TTS) { try { speechSynthesis.cancel(); } catch (e) {} }
+  newRoundNote = false;
   pos += 1;
-  if (pos >= deck.length) { buildDeck(); }
+  if (pos >= deck.length) {
+    const last = deck[deck.length - 1];
+    buildDeck(true);
+    if (deck.length > 1 && deck[0] === last) {
+      const t = deck[0]; deck[0] = deck[1]; deck[1] = t;
+      rounds[selKey()].order = deck.map(function (id) { return ALL[id].de; });
+      saveRounds();
+    }
+    newRoundNote = deck.length > 1;
+  } else {
+    savePos();
+  }
   renderCard();
   $('card').scrollIntoView({ block: 'start', behavior: 'auto' });
 }
@@ -1752,10 +1834,11 @@ $('words').addEventListener('click', function (e) {
   if (!b) return;
   const id = Number(b.dataset.id);
   if (deck.indexOf(id) < 0) {
-    $('chapter').value = 'all';
+    $('chapter').value = 'all'; populateParts(); $('part').value = 'all'; saveSel();
+    newRoundNote = false;
     buildDeck();
   }
-  pos = deck.indexOf(id);
+  pos = deck.indexOf(id); savePos();
   renderCard();
   $('card').scrollIntoView({ block: 'start', behavior: 'auto' });
 });
@@ -1774,13 +1857,19 @@ $('q').addEventListener('input', renderList);
   });
 })();
 
-['dir', 'chapter', 'shuffle'].forEach(function (id) {
+$('chapter').addEventListener('change', function () {
+  populateParts(); newRoundNote = false; saveSel(); updateTally(); buildDeck(); renderCard();
+  if ($('listbox').open) renderList();
+});
+['dir', 'part', 'shuffle'].forEach(function (id) {
   $(id).addEventListener('change', function () {
-    updateTally(); buildDeck(); renderCard();
+    newRoundNote = false; saveSel(); updateTally(); buildDeck(); renderCard();
     if ($('listbox').open) renderList();
   });
 });
-$('artquiz').addEventListener('change', function () { if (!checked) renderCard(); });
+$('artquiz').addEventListener('change', function () { saveSel(); if (!checked) renderCard(); });
+['slow', 'autoplay'].forEach(function (id) { $(id).addEventListener('change', saveSel); });
+$('btn-restart').addEventListener('click', function () { newRoundNote = false; buildDeck(true); renderCard(); });
 
 $('form').addEventListener('submit', function (e) { e.preventDefault(); finish(false); });
 $('btn-reveal').addEventListener('click', function () { finish(true); });
@@ -1801,6 +1890,7 @@ if (TTS) {
 }
 showTtsHint();
 
+restoreSel();
 updateTally();
 buildDeck();
 renderCard();
