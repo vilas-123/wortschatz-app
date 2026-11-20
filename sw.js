@@ -1,5 +1,5 @@
 /* Wortschatz-Trainer service worker: app files and fonts work offline. Change VERSION to force an update. */
-const VERSION = 'v7';
+const VERSION = 'v8';
 const APP = 'wortschatz-app-' + VERSION;
 const FONTS = 'wortschatz-fonts';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
